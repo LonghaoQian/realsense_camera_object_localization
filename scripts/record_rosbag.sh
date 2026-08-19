@@ -2,6 +2,11 @@
 # Records the RealSense color/depth streams and the camera's OptiTrack pose
 # into a rosbag2 bag.
 #
+# Also records /system_monitor/stats (CPU/memory evidence that vision and
+# recording are not starving the autopilot) -- start
+# scripts/system_monitor_node.py in another terminal for that topic to have
+# data; recording proceeds fine without it.
+#
 # Run launch_camera_and_mocap.launch.py in another terminal first, and
 # confirm topic names with `ros2 topic list` before recording -- the
 # /vrpn_mocap/... name depends on CAMERA_BODY below, which must match the
@@ -23,4 +28,5 @@ ros2 bag record \
   /camera/camera/color/camera_info \
   /camera/camera/aligned_depth_to_color/image_raw \
   /camera/camera/aligned_depth_to_color/camera_info \
+  /system_monitor/stats \
   "/vrpn_mocap/${CAMERA_BODY}/pose"

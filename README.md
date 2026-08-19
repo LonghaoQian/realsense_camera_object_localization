@@ -67,3 +67,7 @@ robot body/world frames.
 `ObjectDetector` defaults to `yolov8n.pt` (fast, general-purpose, 80 COCO
 classes) running on `device="cuda"`. Pass a different Ultralytics model path
 (e.g. a custom-trained `.pt`) or `device="cpu"` if needed.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
