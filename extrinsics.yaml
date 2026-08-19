@@ -1,0 +1,14 @@
+# Static rigid transform from the drone body frame (e.g. FCU/Pixhawk frame,
+# FLU convention: X forward, Y left, Z up) to the RealSense camera's
+# mechanical reference point (whatever point your CAD measurement is anchored
+# to on the camera housing -- NOT necessarily the color optical center; see
+# doc/camera_drone_extrinsic_calibration.md for how the small residual offset
+# to the actual optical center is handled separately, in code, from the
+# camera's own factory calibration).
+#
+# translation: meters, drone frame -> camera reference point
+# rotation_quaternion: [x, y, z, w], drone frame -> camera reference frame
+#
+# Fill these in from the CAD mounting design.
+translation: [0.0, 0.0, 0.0]
+rotation_quaternion: [0.0, 0.0, 0.0, 1.0]
