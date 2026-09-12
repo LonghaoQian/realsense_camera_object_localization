@@ -182,3 +182,146 @@ auto-exposure and the depth pipeline have settled, so `3D point at image
 center` frequently prints `None` on this board. That is not a fault — after
 ~30 warm-up frames roughly 78% of depth pixels are valid. `main.py` streams
 continuously and is unaffected.
+
+---
+
+# This box (`orin0`) — a second Orin, and what differs from the table above
+
+Everything above describes `yahboom` (user `jetson`, repo at `~/source/...`). This
+checkout lives on a **different** Orin Nano — `orin0`, at
+`~/dev_ws/src/realsense_camera_object_localization` — which doubles as the **flight
+companion computer** running the `fsc_autopilot_ros2` control stack. Set up and verified
+2026-09-11. Three things differ materially, and the first one will waste an afternoon if
+you don't know it.
+
+## 1. `LD_LIBRARY_PATH` silently binds this venv's torch to the WRONG libtorch
+
+`~/.bashrc` line 125 prepends another environment's libtorch to the library path:
+
+```bash
+export LD_LIBRARY_PATH=/home/orin0/envs/torch_env/lib/python3.10/site-packages/torch/lib:$LD_LIBRARY_PATH
+```
+
+That is deliberate and must stay — it exists for the `torch_model_loader` ROS2 C++
+package, which links libtorch **2.5.0a0+872d972e41.nv24.08** from that env. But
+`LD_LIBRARY_PATH` is searched **before** a library's own `RUNPATH`, so the dynamic linker
+binds this venv's torch *Python* sources against `torch_env`'s *older*
+`libtorch_python.so`. The symptom looks nothing like a path problem:
+
+```
+AttributeError: module 'torch._C' has no attribute 'AcceleratorError'
+```
+
+Diagnose it with `ldd` on the extension — if `libtorch_python.so` resolves outside this
+venv, that is the bug:
+
+```bash
+ldd .venv/lib/python3.10/site-packages/torch/_C.cpython-310-aarch64-linux-gnu.so | grep libtorch
+```
+
+**Already fixed:** `.venv/bin/activate` has a guarded block appended that prepends this
+venv's own `torch/lib`. So a plain `source .venv/bin/activate` is correct and needs no
+extra steps. If you ever rebuild the venv from scratch, re-add that block or the error
+comes back.
+
+## 2. JetPack's ML stack is NOT installed here, so the setup above is insufficient
+
+On `yahboom`, `torch`/`torchvision`/`opencv`/`ultralytics` come from JetPack and the only
+missing piece is `pyrealsense2`. **Not so here.** On `orin0`:
+
+- `nvidia-jetpack` is **not** installed (it is available: `apt-cache policy nvidia-jetpack`
+  offers `6.2.1+b38`).
+- There is no system `torch`, `torchvision` or `ultralytics` at all.
+- System `opencv` is stock Ubuntu **4.5.4**, *not* JetPack's CUDA-enabled 4.10. The
+  README's warning about pip shadowing a CUDA OpenCV therefore does not apply here —
+  there is no CUDA OpenCV to protect, so `opencv-python` from pip is fine.
+- CUDA 12.6, cuDNN 9.3, TensorRT 10.3 and `libcusparseLt` **are** present, which is what
+  the CUDA torch wheels actually need.
+
+Verified working stack, installed into `.venv` (created with `--system-site-packages`):
+
+| Package | Version | Source |
+| --- | --- | --- |
+| torch | 2.8.0 | jetson-ai-lab `jp6/cu126`, CUDA build |
+| torchvision | 0.23.0 | jetson-ai-lab `jp6/cu126`, CUDA build (matched pair) |
+| ultralytics | 8.4.148 | PyPI |
+| opencv-python | 4.10.0.84 | PyPI, pinned |
+| numpy | 1.26.4 | PyPI, pinned |
+| pyrealsense2 | 2.58.4.10922 | PyPI `manylinux2014_aarch64` |
+
+Confirmed: `torch.cuda.is_available()` → `True`, device `Orin`, and
+`torchvision.ops.nms` runs on CUDA tensors.
+
+### Three traps in getting those wheels
+
+- **`pip install --extra-index-url <jetson> torch==2.8.0` gives you a CPU-only torch.**
+  PyPI publishes `2.8.0+cpu`, and a local version suffix sorts *higher* than plain
+  `2.8.0`, so pip prefers PyPI's CPU wheel over the jetson CUDA one. This is exactly the
+  silent ~10x slowdown the README warns about. **Pin the wheel by full URL** (see
+  `https://pypi.jetson-ai-lab.io/jp6/cu126/+simple/torch/`) and pass `--no-deps`.
+- **torch 2.9.x needs `libcudss.so.0`, which is absent here.** It is obtainable
+  (`nvidia-cudss-cu12` on PyPI has an aarch64 wheel, or `libcudss0-cuda-12` via apt) but
+  2.8.0 avoids the dependency entirely, which is why 2.8.0 is pinned.
+- **Pin `opencv-python` and `numpy` explicitly.** Left alone, `pip install ultralytics`
+  pulled `opencv-python` **5.0.0.93** (an unreleased major) and `numpy` 2.2.6. Both work
+  in isolation but are needless risk next to a C-extension like `pyrealsense2`.
+
+Do **not** run `pip install -r requirements.txt` here either — it would fetch a CPU-only
+torch through `ultralytics`' dependency chain.
+
+## 3. The camera is currently on a USB 2 link — and it still sustains 30 fps
+
+`camera_info.usb_type_descriptor` reports `2.1`, and `lsusb -t` shows the D435i at
+**480M** on bus 01. Bus 02 is the 10000M (USB 3.2) root hub and is empty. So the camera
+is in the wrong port or behind a USB 2 hub.
+
+Contrary to the warning earlier in this doc, that does **not** break the default config.
+Measured on this link: **29.97 fps** at 640x480 aligned depth+color, inter-frame gap
+33.4 ms mean / 34.0 ms max — essentially perfect. 640x480@30 is about 295 Mbps of the
+480 Mbps link, so it fits, but with no headroom: higher resolutions are capped
+(1280x720 colour tops out at 15 fps, depth at 6 fps). Move it to a bus-02 port if you
+need more than 640x480@30.
+
+One real symptom to not misread: **`test_camera.py` and short runs reported only ~12.5%
+valid depth pixels**, against ~78% noted earlier in this doc. That was the camera lying
+loose on a bench pointing at a near blank surface, not a fault — aim it at a normal scene
+at 0.5-4 m before judging depth quality.
+
+## 4. Vision must stay off the isolated CPUs
+
+`orin0` flies the drone, so its CPUs are partitioned: the `fsc_autopilot_ros2` control
+node owns isolated **CPU 5** and `MicroXRCEAgent` owns isolated **CPU 4**. Full reference:
+`~/dev_ws/src/fsc_autopilot_ros2/docs/realtime_cpu_isolation.md`.
+
+Vision is confined to the housekeeping cores **0-3** and gets **no** real-time priority —
+it is throughput-bound, and a stalled frame pipeline must never be able to preempt the
+control loop. `scripts/run_detection_tmux.sh` applies this itself via `taskset`; override
+with `FSC_VISION_CPUS` only if the partition changes. It warns if the kernel reports no
+isolated CPUs, because pinning alone does not protect anything in that case.
+
+### Measured coexistence (2026-09-11)
+
+With this detection loop running continuously at ~92% of one core, the autopilot's 250 Hz
+control loop (4000 µs period) on isolated CPU 5 measured:
+
+| | mean | p99 | p99.9 | **max** | missed deadlines |
+|---|---|---|---|---|---|
+| **control loop, vision running** | 3.6 µs | 4.4 µs | 5.0 µs | **9.7 µs** | **0 / 11250** |
+| control loop, before CPU isolation, box loaded | 71 µs | 83 µs | 3630 µs | **7871 µs** | 2 / 5000 |
+
+So the vision stack costs the flight controller **9.7 µs of worst-case jitter out of a
+4000 µs budget (0.24%)**, reproduced across two separate runs. Re-measure with
+`fsc_autopilot_ros2/scripts/realtime/measure_jitter.sh --seconds 60` while this loop runs,
+rather than assuming it still holds after changes.
+
+GPU inference measured **31.4 ms/frame** for `yolov8n.pt` at 640x480 — within 2% of the
+30.8 ms recorded for `yahboom` above, so the CUDA path is performing as expected. Note
+this is why GPU inference matters here beyond raw speed: it keeps YOLO off the CPUs,
+leaving the housekeeping set free. A CPU-only torch would saturate cores 0-3 continuously.
+
+### One honest caveat
+
+CPU isolation does not partition **memory bandwidth, the GPU, or thermals**. The numbers
+above already include a real CUDA vision workload, so they account for normal GPU use —
+but a much heavier GPU/EMC load (TensorRT at high resolution, multiple models) is outside
+what was measured. Re-measure if the vision workload grows substantially.

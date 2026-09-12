@@ -17,6 +17,16 @@ pip install -r requirements.txt
 plus `pip install -r requirements.txt` would shadow them with a CPU-only
 torch. See [doc/jetson_orin_setup.md](doc/jetson_orin_setup.md).
 
+**On `orin0` (the flight companion computer) the venv is already set up** and
+the setup differs again — JetPack's ML stack is *not* installed there, the
+torch/torchvision CUDA wheels must be pinned by URL, and `~/.bashrc` puts a
+different libtorch on `LD_LIBRARY_PATH` that silently breaks `import torch`.
+Read the "This box (`orin0`)" section at the end of
+[doc/jetson_orin_setup.md](doc/jetson_orin_setup.md) before touching the
+environment there. `orin0` also partitions its CPUs for flight control, so the
+detection loop must stay on CPUs 0-3 — `scripts/run_detection_tmux.sh` does
+that for you.
+
 ## Usage
 
 1. Confirm the camera streams correctly:

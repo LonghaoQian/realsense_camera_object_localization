@@ -43,6 +43,28 @@ fi
 
 mkdir -p "$LOG_DIR"
 
+# --- CPU confinement ----------------------------------------------------------------
+# This Orin also flies the drone. The fsc_autopilot control node owns isolated CPU 5 and
+# MicroXRCEAgent owns isolated CPU 4; see
+#   ~/dev_ws/src/fsc_autopilot_ros2/docs/realtime_cpu_isolation.md
+# Vision is confined to the housekeeping cores so it can never delay flight control, and
+# gets no real-time priority: it is throughput-bound, and a stalled frame pipeline must
+# never be able to preempt the control loop.
+#
+# Measured on this box 2026-09-11 with this loop running at ~93% of a core: the 250 Hz
+# control loop on CPU 5 saw 9.7 us maximum jitter and 0 missed deadlines in 15000
+# (4000 us period). Before CPU isolation the same 250 Hz loop saw 7871 us and 2 misses.
+# Override with FSC_VISION_CPUS if the partition in cpu_layout.sh ever changes.
+VISION_CPUS="${FSC_VISION_CPUS:-0-3}"
+
+if [[ -z "$(cat /sys/devices/system/cpu/isolated 2>/dev/null)" ]]; then
+  echo "WARNING: the kernel reports no isolated CPUs, so pinning vision to" >&2
+  echo "         $VISION_CPUS does NOT protect the flight control loop -- other work" >&2
+  echo "         (and IRQs) can still be scheduled onto CPUs 4-5." >&2
+  echo "         Fix: sudo fsc_autopilot_ros2/scripts/realtime/setup_realtime.sh, reboot" >&2
+  echo "         into the 'realtime' boot entry. Continuing anyway." >&2
+fi
+
 # Build the command with the extra args quoted individually, so things like
 # --model "my model.pt" survive the trip through tmux's shell.
 #
@@ -59,13 +81,19 @@ for arg in "$@"; do
 done
 CMD+=" > >(tee $(printf %q "$LOG_FILE")) 2>&1"
 
-tmux new-session -d -s "$SESSION" -c "$REPO_ROOT" "bash -c $(printf %q "$CMD")"
+# taskset wraps the whole pane so the tee subshell is confined too, not just python.
+# Leading `exec` matters: tmux runs this string through /bin/sh, and without exec that
+# shell lingers as an unpinned parent on the isolated cores (harmless -- it is
+# blocked in wait() at SCHED_OTHER and cannot preempt the FIFO-80 control node --
+# but it trips verify_realtime.sh's stray-task check). exec replaces it instead.
+tmux new-session -d -s "$SESSION" -c "$REPO_ROOT" "exec taskset -c $(printf %q "$VISION_CPUS") bash -c $(printf %q "$CMD")"
 
 # Keep the pane around after the process exits so a crash is still readable
 # on attach, rather than the whole session silently disappearing.
 tmux set-option -t "$SESSION" remain-on-exit on >/dev/null
 
 echo "Started detached tmux session '$SESSION'."
+echo "  cpus:   $VISION_CPUS (housekeeping set; flight control owns 4-5)"
 echo "  log:    $LOG_FILE"
 echo "  attach: tmux attach -t $SESSION   (Ctrl-b d to detach)"
 echo "  stop:   tmux kill-session -t $SESSION"
