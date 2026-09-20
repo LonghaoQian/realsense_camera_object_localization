@@ -149,6 +149,31 @@ robot body/world frames.
   — static camera-to-drone transform derived from CAD, composed with the
   camera's own factory depth->color calibration.
 
+## Detecting only certain classes
+
+```bash
+python main.py --headless --classes bottle --conf 0.4   # bottles only
+python main.py --list-classes                           # the 80 COCO names
+```
+
+Filtering is done inside the model, not on its output, so a single-class run is cheaper
+than detecting all 80 and discarding 79. An unknown class name raises rather than being
+silently ignored.
+
+## Publishing to ROS 2 (for `ros2 bag record`)
+
+```bash
+source /opt/ros/humble/setup.bash
+python main.py --headless --classes bottle --ros
+```
+
+Publishes `/vision/detections` (JSON), `/vision/target/pose` (`PoseStamped`) and
+`/vision/color/compressed` (JPEG). No package or build needed — this stays a standalone
+project. See the "Class filtering and ROS 2 recording" section of
+[doc/jetson_orin_setup.md](doc/jetson_orin_setup.md), including why images are published
+compressed (1.9 GB/hour vs 99 GB/hour raw) and why recording belongs on the Orin rather
+than the ground station.
+
 ## Swapping the detection model
 
 `ObjectDetector` defaults to `yolov8n.pt` (fast, general-purpose, 80 COCO

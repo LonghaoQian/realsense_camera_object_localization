@@ -325,3 +325,90 @@ CPU isolation does not partition **memory bandwidth, the GPU, or thermals**. The
 above already include a real CUDA vision workload, so they account for normal GPU use —
 but a much heavier GPU/EMC load (TensorRT at high resolution, multiple models) is outside
 what was measured. Re-measure if the vision workload grows substantially.
+
+---
+
+# Class filtering and ROS 2 recording (added 2026-09-20)
+
+## Detecting one class only
+
+```bash
+python main.py --headless --classes bottle --conf 0.4
+python main.py --list-classes            # the model's 80 COCO names, with ids
+```
+
+`--classes` is passed down to Ultralytics as `classes=[...]` rather than filtering the
+results afterwards, so the model skips non-matching classes during NMS — a single-class
+run is cheaper than detecting all 80 and discarding 79. Nothing else ever reaches the
+console, the ROS topics, or the display.
+
+An unknown class name **raises** instead of being ignored. A silently-dropped bad name
+would leave the loop running forever reporting nothing, which looks exactly like a camera
+or detection fault; failing at startup is far cheaper to diagnose.
+
+Verified live 2026-09-20 with a water bottle at ~1.1 m: `bottle (0.54-0.69)` at
+`X=-0.00 Y=0.07 Z=1.10 m`, stable, with no other objects reported.
+
+## Publishing to ROS 2 so runs can be bagged
+
+`main.py` is standalone and publishes nothing by default. `--ros` adds publication, with
+no package/build needed — this project has no `package.xml` and is not a colcon package;
+`rclpy` works from a plain script once `/opt/ros/humble/setup.bash` is sourced.
+
+```bash
+source /opt/ros/humble/setup.bash
+python main.py --headless --classes bottle --conf 0.4 --ros
+```
+
+| topic | type | notes |
+|---|---|---|
+| `/vision/detections` | `std_msgs/String` | JSON: label, confidence, bbox, XYZ, stamp. Self-describing, survives adding fields. |
+| `/vision/target/pose` | `geometry_msgs/PoseStamped` | Highest-confidence detection, for direct downstream consumption. |
+| `/vision/color/compressed` | `sensor_msgs/CompressedImage` | JPEG. `--ros-no-image` omits it, `--ros-image-every N` decimates it. |
+
+Standard message types only, because a custom `Detection3D` would require making this a
+package, and `vision_msgs` (which has exactly the right type) is not installed here.
+
+**Nothing is published on `target/pose` when there is no detection.** An empty
+`PoseStamped` is indistinguishable from "target at the camera origin" — a dangerous
+ambiguity for any controller consuming it. Absence of the message is the signal.
+
+### Compressed, not raw — this is what makes recording viable
+
+| stream | rate |
+|---|---|
+| raw `sensor_msgs/Image` 640x480x3 @30 | **27.6 MB/s** = 221 Mbit/s = 99 GB/hour |
+| JPEG `CompressedImage`, real scene | **0.54 MB/s** = 4.3 Mbit/s = **1.9 GB/hour** |
+
+Raw is a non-starter: it saturates WiFi outright and costs ~100 GB/hour locally, plus the
+memory-bandwidth cost of moving it — the one resource CPU isolation does *not* partition.
+
+## Where to record: on the Orin, not the ground station
+
+Measured 2026-09-20, vision at 90% of one core, control-loop jitter probe on isolated
+CPU 5 (250 Hz, 4000 us period):
+
+| condition | max jitter | missed deadlines |
+|---|---|---|
+| vision running, no recording | 9.5 us | 0 / 5000 |
+| **vision + `ros2 bag record` on the Orin** | **9.9 us** | **0 / 5000** |
+
+**Recording locally costs the control loop nothing measurable** — 0.4 us of difference is
+well inside run-to-run variation, and neither run missed a deadline. CPU isolation keeps
+the recorder on CPUs 0-3, and NVMe writes are DMA rather than CPU work.
+
+Bag: 13.5 MB over 25 s = **1.9 GB/hour**, 1471 messages. With 192 GB free that is ~100
+hours of headroom.
+
+Record on the Orin anyway, even though 4.3 Mbit/s would fit over WiFi:
+
+- **A bag is a record; it must not depend on a radio link.** If WiFi drops mid-flight —
+  which is exactly when the data is most interesting — the ground-station bag has a hole
+  in it, or ends.
+- The image topic is best-effort, so WiFi loss silently drops frames. Making it reliable
+  is worse: retransmits over a lossy link cost the *Orin* CPU and add latency.
+- The Orin pays the serialisation cost either way, so streaming saves it nothing.
+
+Ground-station recording is a reasonable *addition* for live monitoring, not a
+replacement. If bandwidth ever matters, `--ros-image-every 3` cuts the image stream to
+10 fps while detections stay at full rate.

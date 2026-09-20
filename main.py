@@ -46,6 +46,32 @@ def parse_args():
     p.add_argument("--model", default="yolov8n.pt", help="Ultralytics model path")
     p.add_argument("--device", default="cuda", help="'cuda' or 'cpu'")
     p.add_argument("--conf", type=float, default=0.5, help="detection confidence threshold")
+    p.add_argument(
+        "--classes", nargs="+", default=None, metavar="NAME",
+        help="only detect these COCO classes, e.g. --classes bottle. "
+             "Default: all 80. Filtering happens inside the model, so a "
+             "single-class run is cheaper than detecting everything and discarding.",
+    )
+    p.add_argument(
+        "--list-classes", action="store_true",
+        help="print the model's class names and exit",
+    )
+    p.add_argument(
+        "--ros", action="store_true",
+        help="publish detections (and RGB) as ROS2 topics so the run can be "
+             "recorded with `ros2 bag record`. Requires /opt/ros/humble sourced.",
+    )
+    p.add_argument("--ros-ns", default="/vision", help="ROS namespace for --ros")
+    p.add_argument(
+        "--ros-no-image", action="store_true",
+        help="with --ros, publish detections only (no RGB). Smallest possible bag.",
+    )
+    p.add_argument(
+        "--ros-image-every", type=int, default=1, metavar="N",
+        help="with --ros, publish only every Nth RGB frame (N=3 -> 10 fps). "
+             "Cuts bag size and bandwidth proportionally; detections stay at full rate.",
+    )
+    p.add_argument("--ros-jpeg-quality", type=int, default=80, help="JPEG quality for --ros")
     p.add_argument("--headless", action="store_true", help="skip the display window entirely")
     p.add_argument(
         "--stream", nargs="?", const=8080, type=int, default=None, metavar="PORT",
@@ -57,11 +83,32 @@ def parse_args():
 
 def main():
     args = parse_args()
-    detector = ObjectDetector(model_path=args.model, device=args.device, conf_threshold=args.conf)
+
+    if args.list_classes:
+        from ultralytics import YOLO
+        for idx, name in sorted(YOLO(args.model).names.items()):
+            print(f"{idx:3d}  {name}")
+        return
+
+    detector = ObjectDetector(
+        model_path=args.model, device=args.device, conf_threshold=args.conf,
+        classes=args.classes,
+    )
+    print(f"Detecting classes: {detector.class_names} (conf >= {args.conf})")
 
     show = not args.headless and open_window()
     if not show and not args.headless:
         print("No usable display (GUI backend unavailable) -- running headless.")
+
+    publisher = None
+    if args.ros:
+        from ros_publisher import VisionPublisher
+        publisher = VisionPublisher(
+            namespace=args.ros_ns,
+            publish_image=not args.ros_no_image,
+            jpeg_quality=args.ros_jpeg_quality,
+            image_every=args.ros_image_every,
+        )
 
     streamer = None
     if args.stream is not None:
@@ -78,6 +125,11 @@ def main():
 
                 detections = detector.detect(color_image)
                 detections3d = localize(camera, detections, depth_image)
+
+                # Publish before drawing: the annotated copy is a display concern and
+                # must not sit between detection and the recorded timestamp.
+                if publisher is not None:
+                    publisher.publish(color_image, detections3d)
 
                 for det in detections3d:
                     X, Y, Z = det.position
@@ -98,6 +150,8 @@ def main():
         finally:
             if streamer is not None:
                 streamer.stop()
+            if publisher is not None:
+                publisher.shutdown()
             cv2.destroyAllWindows()
 
 
