@@ -18,10 +18,13 @@ MEASURED COST OF JPEG ENCODING (2026-09-20, real frames, 640x480, this board):
         60       2.51       15.5        5.0
         50       2.48       13.6        5.0
 
-The shape of that table is the useful part: **quality barely affects encode time but
-strongly affects size**. So lower the quality to shrink files -- it is nearly free -- and
-lower the rate only if CPU is the constraint. Encoding at all costs ~5% of one core, next
-to ~90% for the detection loop itself, so it is not where the CPU goes.
+That table is the ENCODER in isolation, and in context it is misleading -- see
+doc/jetson_orin_setup.md, "What publishing actually costs". Measured in the running loop,
+publishing adds no CPU at all: the process is saturated at ~95% of one core whether or not
+--ros is passed. The cost appears as LOOP RATE, and it tracks message BYTES rather than
+encode work: q80 vs q60 differs by 0.13 ms/frame of encode (~0.1%) but 50% in message size,
+and costs 5% of loop rate. The expensive part is CDR serialization, the tobytes() copy and
+the DDS write -- not the encoder.
 
 WHY COMPRESSED IMAGES, NOT RAW -- this is the decision that makes recording viable:
 

@@ -414,37 +414,72 @@ replacement.
 
 ## Recommended settings for presentation/display bags
 
-When the bag is for showing results rather than for analysis, occasional dropped frames
-are fine and the constraints are file size and CPU:
+When the bag is for showing results rather than analysis, occasional dropped frames are
+fine and the constraints are file size and CPU:
 
 ```bash
-python main.py --headless --classes bottle --conf 0.4 --ros \
-    --ros-image-hz 10 --ros-jpeg-quality 60
+python main.py --headless --classes bottle --conf 0.4 --ros --ros-image-hz 10
 ```
 
-Measured 2026-09-20 over 30 s:
+(`--ros-jpeg-quality 80` is the default, so it can be omitted.)
 
-| | |
+## What publishing actually costs — measured 2026-09-20
+
+**It does not show up as CPU.** Process CPU over 30 s windows, model load excluded:
+
+| config | CPU |
 |---|---|
-| localization (`detections`, `target/pose`) | **24.9 Hz** — full loop rate |
-| images | **9.67 Hz** |
-| bag | **0.69 GB/hour** (vs 1.9 GB/hour at the defaults) |
-| vision total | 90.1% of one core, unchanged |
+| no `--ros` | 95.2% of one core |
+| `--ros`, detections only | 95.6% |
+| `--ros`, images 10 Hz q60 | 94.2% |
+| `--ros`, images full rate q80 | 93.5% |
 
-**Localization stays at full rate; only the image stream is decimated.** That is the right
-split: the 3D positions are the data, the RGB is context for a viewer.
+Flat, and **non-monotonic** — the heaviest config measured lowest, which is the signature
+of noise rather than signal. The process is saturated at ~95% of one core no matter what,
+so publishing does not add CPU; it displaces work within the same budget.
 
-### Which knob to turn, and why
+The cost appears as **loop rate** instead. Measured via `/vision/detections`, which is
+exactly one message per loop iteration (counting printed lines is wrong — `main.py` prints
+one line per *detection*, so a second object inflates it past the camera's 30 fps):
 
-Encode cost barely depends on quality but size does, so the two knobs do different jobs:
+| config | loops/s |
+|---|---|
+| detections only, no images | 29.8 (camera-limited) |
+| images 10 Hz q60 | 25.3 |
+| **images 10 Hz q80** | **24.0** |
+| images full rate q80 | 22.6 |
 
-- **Quality shrinks files almost for free.** 80 -> 60 cuts 23.8 -> 15.5 kB/frame (-35%)
-  for 0.13 ms/frame (-0.3% of a core).
-- **Rate cuts CPU and size together**, proportionally. 20 -> 10 Hz halves both.
+### Quality at 10 Hz: q60 vs q80
 
-Encoding at all costs ~5% of one core at 20 Hz, against ~90% for the detection loop, so
-JPEG is not where the CPU goes. Turn quality down first; turn rate down only if you
-actually need the CPU back.
+| quality | loops/s | bag | GB/hour | images in 25 s |
+|---|---|---|---|---|
+| 60 | 25.3 | 4.7 MB / 25 s | 0.68 | 244 |
+| **80** | **24.0** | 7.1 MB / 25 s | **1.02** | 244 |
+
+q80 costs **+50% file size and −5% loop rate** over q60. Both are comfortable: 24 Hz
+localization exceeds the 20 Hz the application needs, and 1 GB/hour against 192 GB free is
+~188 hours. **q80 is the recommended setting** — the better image is worth it for
+presentation, and nothing is under pressure.
+
+### The cost is the publish path, not the encoder
+
+The isolated encoder benchmark (quality table above) is real but misleading in context.
+Encode time for q80 vs q60 differs by 0.13 ms/frame — 1.3 ms/s at 10 Hz, about 0.1% — yet
+the loop lost 5%. What changed by 50% is the **message size** (23.8 vs 15.5 kB).
+
+So the cost lives in CDR serialization, the `tobytes()` copy and the DDS write, and it
+tracks message bytes rather than encode work. **The encoder was never the thing to
+optimize.** If that 13-19% of loop rate is ever wanted back, look there.
+
+It is sublinear, not proportional: 0 -> 10 image publishes/s costs 4.5 loops/s, but
+10 -> 22.6/s costs only another 2.7, so there is a fixed per-publish component as well.
+Characterised far enough to choose settings; further attribution was not worth the time.
+
+### None of this touches flight control
+
+Vision is confined to CPUs 0-3. With `ros2 bag record` running on the Orin, the control
+loop on isolated CPU 5 measured 9.9 us max jitter against 9.5 us without — 0 missed
+deadlines either way. See `fsc_autopilot_ros2/docs/realtime_cpu_isolation.md`.
 
 ### The rate limiter holds an average, not a period
 
