@@ -168,7 +168,9 @@ python main.py --headless --classes bottle --ros
 ```
 
 Publishes `/vision/detections` (JSON), `/vision/target/pose` (`PoseStamped`) and
-`/vision/color/compressed` (JPEG). No package or build needed — this stays a standalone
+`/vision/color/compressed` (JPEG). For a presentation/display bag —
+`--ros-image-hz 10 --ros-jpeg-quality 60` — localization stays at the full ~25 Hz while
+images drop to 10 Hz, giving 0.69 GB/hour instead of 1.9. No package or build needed — this stays a standalone
 project. See the "Class filtering and ROS 2 recording" section of
 [doc/jetson_orin_setup.md](doc/jetson_orin_setup.md), including why images are published
 compressed (1.9 GB/hour vs 99 GB/hour raw) and why recording belongs on the Orin rather

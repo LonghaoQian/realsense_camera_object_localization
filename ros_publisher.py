@@ -10,6 +10,19 @@ Detection3D message would require turning this into a package with a CMake/ament
 `vision_msgs` (which has exactly the right Detection3DArray type) is not installed on this
 box either. Standard types cost nothing and keep the project buildless.
 
+MEASURED COST OF JPEG ENCODING (2026-09-20, real frames, 640x480, this board):
+
+    quality   ms/frame   kB/frame   % of one core @ 20 Hz
+        90       3.22       37.7        6.4
+        80       2.64       23.8        5.3
+        60       2.51       15.5        5.0
+        50       2.48       13.6        5.0
+
+The shape of that table is the useful part: **quality barely affects encode time but
+strongly affects size**. So lower the quality to shrink files -- it is nearly free -- and
+lower the rate only if CPU is the constraint. Encoding at all costs ~5% of one core, next
+to ~90% for the detection loop itself, so it is not where the CPU goes.
+
 WHY COMPRESSED IMAGES, NOT RAW -- this is the decision that makes recording viable:
 
     raw sensor_msgs/Image  640x480x3 @ 30 fps = 27.6 MB/s
@@ -38,7 +51,7 @@ class VisionPublisher:
     """
 
     def __init__(self, namespace="/vision", publish_image=True, jpeg_quality=80,
-                 image_every=1, frame_id="camera_color_optical_frame"):
+                 image_hz=0.0, frame_id="camera_color_optical_frame"):
         import rclpy
         from rclpy.node import Node
         from rclpy.qos import qos_profile_sensor_data
@@ -59,8 +72,12 @@ class VisionPublisher:
         self.frame_id = frame_id
         self.publish_image = publish_image
         self.jpeg_quality = int(jpeg_quality)
-        self.image_every = max(1, int(image_every))
-        self._frame_counter = 0
+        # Rate limit by TIME, not by frame count. The loop runs at whatever rate
+        # detection allows (~20 Hz on this board, not the camera's 30), so counting
+        # frames can only give 20/10/6.7 Hz -- you cannot ask for 15. A wall-clock
+        # limiter gives the rate actually requested regardless of loop speed.
+        self.image_period = (1.0 / image_hz) if image_hz and image_hz > 0 else 0.0
+        self._next_image_time = 0.0
 
         # Detections and pose go out RELIABLE (default QoS): they are small, and a
         # dropped detection is a hole in the record that cannot be reconstructed.
@@ -124,8 +141,21 @@ class VisionPublisher:
             self.pub_target.publish(pose)
 
         if self.pub_image is not None:
-            self._frame_counter += 1
-            if self._frame_counter % self.image_every == 0:
+            now = time.monotonic()
+            if self.image_period == 0.0 or now >= self._next_image_time:
+                # Advance the schedule by exactly one period so the AVERAGE rate is the
+                # one asked for. Scheduling from `now` instead looks simpler but silently
+                # under-delivers: a publish can only happen on a loop tick, so `now +
+                # period` rounds up to the next tick every time. Measured with a ~25 Hz
+                # loop, asking for 15 Hz that way produced 12.5 Hz.
+                #
+                # The clamp stops it becoming a catch-up burst: if we have fallen more
+                # than a period behind (loop stalled, or the requested rate exceeds the
+                # loop rate), restart the schedule from now rather than firing repeatedly
+                # to "make up" frames that are no longer current.
+                self._next_image_time += self.image_period
+                if self._next_image_time < now:
+                    self._next_image_time = now + self.image_period
                 ok, buf = cv2.imencode(
                     ".jpg", color_image, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
                 )

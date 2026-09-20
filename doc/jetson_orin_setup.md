@@ -410,5 +410,50 @@ Record on the Orin anyway, even though 4.3 Mbit/s would fit over WiFi:
 - The Orin pays the serialisation cost either way, so streaming saves it nothing.
 
 Ground-station recording is a reasonable *addition* for live monitoring, not a
-replacement. If bandwidth ever matters, `--ros-image-every 3` cuts the image stream to
-10 fps while detections stay at full rate.
+replacement.
+
+## Recommended settings for presentation/display bags
+
+When the bag is for showing results rather than for analysis, occasional dropped frames
+are fine and the constraints are file size and CPU:
+
+```bash
+python main.py --headless --classes bottle --conf 0.4 --ros \
+    --ros-image-hz 10 --ros-jpeg-quality 60
+```
+
+Measured 2026-09-20 over 30 s:
+
+| | |
+|---|---|
+| localization (`detections`, `target/pose`) | **24.9 Hz** — full loop rate |
+| images | **9.67 Hz** |
+| bag | **0.69 GB/hour** (vs 1.9 GB/hour at the defaults) |
+| vision total | 90.1% of one core, unchanged |
+
+**Localization stays at full rate; only the image stream is decimated.** That is the right
+split: the 3D positions are the data, the RGB is context for a viewer.
+
+### Which knob to turn, and why
+
+Encode cost barely depends on quality but size does, so the two knobs do different jobs:
+
+- **Quality shrinks files almost for free.** 80 -> 60 cuts 23.8 -> 15.5 kB/frame (-35%)
+  for 0.13 ms/frame (-0.3% of a core).
+- **Rate cuts CPU and size together**, proportionally. 20 -> 10 Hz halves both.
+
+Encoding at all costs ~5% of one core at 20 Hz, against ~90% for the detection loop, so
+JPEG is not where the CPU goes. Turn quality down first; turn rate down only if you
+actually need the CPU back.
+
+### The rate limiter holds an average, not a period
+
+`--ros-image-hz` advances its schedule by exactly one period per publish rather than from
+the current time. That distinction is not cosmetic: a publish can only happen on a loop
+tick, so scheduling from `now` rounds up to the next tick every time and silently
+under-delivers — measured, asking for 15 Hz that way produced **12.5 Hz**. With the
+average-rate schedule, asking for 10 Hz gives 9.67 Hz.
+
+There is a clamp: if the loop falls more than one period behind, or the requested rate
+exceeds the loop rate, the schedule restarts from now instead of firing a catch-up burst
+of frames that are no longer current.

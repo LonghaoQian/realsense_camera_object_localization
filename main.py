@@ -67,9 +67,10 @@ def parse_args():
         help="with --ros, publish detections only (no RGB). Smallest possible bag.",
     )
     p.add_argument(
-        "--ros-image-every", type=int, default=1, metavar="N",
-        help="with --ros, publish only every Nth RGB frame (N=3 -> 10 fps). "
-             "Cuts bag size and bandwidth proportionally; detections stay at full rate.",
+        "--ros-image-hz", type=float, default=0.0, metavar="HZ",
+        help="with --ros, cap RGB publication at HZ (0 = every frame, ~20 Hz). "
+             "Time-based, so 15 is achievable even though the loop runs at ~20 Hz. "
+             "Detections and pose always stay at full rate.",
     )
     p.add_argument("--ros-jpeg-quality", type=int, default=80, help="JPEG quality for --ros")
     p.add_argument("--headless", action="store_true", help="skip the display window entirely")
@@ -107,7 +108,7 @@ def main():
             namespace=args.ros_ns,
             publish_image=not args.ros_no_image,
             jpeg_quality=args.ros_jpeg_quality,
-            image_every=args.ros_image_every,
+            image_hz=args.ros_image_hz,
         )
 
     streamer = None
