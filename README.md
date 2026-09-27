@@ -49,12 +49,24 @@ that for you.
    Detected objects are drawn on screen with their label, confidence, and
    `X, Y, Z` position in meters. Press `q` to quit.
 
-   `main.py` takes `--model`, `--device`, `--conf`, `--headless` and
-   `--stream`. Without a usable display (e.g. over SSH) it falls back to
-   console output on its own rather than failing.
+   `main.py` takes `--model`, `--device`, `--conf`, `--classes`,
+   `--list-classes`, `--headless`, `--stream`, and the `--ros*` family (see
+   "Detecting only certain classes" and "Publishing to ROS 2" below). Without
+   a usable display (e.g. over SSH) it falls back to console output on its
+   own rather than failing.
 
    To watch the annotated feed from another machine, add `--stream` and open
    the printed URL (`http://<host-ip>:8080/`) in a browser.
+
+   On `orin0`/the Orin, launch under tmux instead of calling `main.py`
+   directly, so the loop stays pinned off the flight-control CPUs and
+   survives an SSH disconnect:
+
+   ```bash
+   ./scripts/run_detection_tmux.sh --classes bottle --ros --ros-ns uav_0 --stream 8080
+   ./scripts/tmux_status.sh        # still running?
+   tmux kill-session -t rs_detect  # stop it
+   ```
 
 ## Finding the host's IP address
 
@@ -174,6 +186,10 @@ project. See the "Class filtering and ROS 2 recording" section of
 [doc/jetson_orin_setup.md](doc/jetson_orin_setup.md), including why images are published
 compressed (1.9 GB/hour vs 99 GB/hour raw) and why recording belongs on the Orin rather
 than the ground station.
+
+Default namespace is `/vision`; override with `--ros-ns` to match a specific vehicle in a
+multi-drone setup, e.g. `--ros-ns uav_0` publishes `/uav_0/detections`,
+`/uav_0/target/pose`, `/uav_0/color/compressed`.
 
 ## Swapping the detection model
 

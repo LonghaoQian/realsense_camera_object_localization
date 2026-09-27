@@ -1,5 +1,9 @@
 # Camera<->drone extrinsic from CAD
 
+The rotation can be measured instead of taken from CAD, by comparing the camera's IMU
+with the Pixhawk's. See `doc/imu_to_imu_rotation_calibration.md`. CAD remains the
+source for the translation.
+
 Since the mount is rigid, this is a one-time static transform, not something
 recorded/tracked continuously. `extrinsics.yaml` + `extrinsics.py` hold it.
 

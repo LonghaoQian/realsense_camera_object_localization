@@ -36,6 +36,11 @@ python main.py           # live detection + localization loop, 'q' to quit
 - `stream.py` — `MJPEGServer`: stdlib-only HTTP server publishing the
   annotated frames as MJPEG (`--stream [PORT]`), so the feed is viewable in a
   browser from another machine. Encodes only while a client is connected.
+- `ros_publisher.py` — `VisionPublisher`: optional ROS2 publishing (`--ros`)
+  of detections (JSON), the best detection as `PoseStamped`, and the RGB
+  frame as a JPEG `CompressedImage`, so a run can be `ros2 bag record`ed
+  without turning this into a colcon package. Lazily imported — untouched
+  unless `--ros` is passed.
 - `main.py` — ties the above into a live OpenCV display loop.
 
 ## Coordinate frame
@@ -63,11 +68,21 @@ robot body/world frames.
   crash mid-stream) — it still enumerates on USB 3.2 and the pipeline still
   "starts", so the USB link is a red herring. Re-running does not clear it;
   `scripts/reset_camera.sh` does (firmware reset + verifies frames flow).
-- `main.py` takes `--model/--device/--conf/--headless/--stream`. It probes for a usable
-  OpenCV GUI backend at startup and falls back to console-only output if there
-  isn't one — JetPack's OpenCV is GTK2 and cannot open a window over forwarded
-  X11, so on the Orin it is effectively always headless unless run with
-  `DISPLAY=:0` on the attached monitor.
+- `main.py` takes `--model/--device/--conf/--classes/--list-classes/--headless/--stream`,
+  plus the `--ros*` family (`--ros/--ros-ns/--ros-no-image/--ros-image-hz/--ros-jpeg-quality`).
+  It probes for a usable OpenCV GUI backend at startup and falls back to console-only output
+  if there isn't one — JetPack's OpenCV is GTK2 and cannot open a window over forwarded
+  X11, so on the Orin it is effectively always headless unless run with `DISPLAY=:0` on the
+  attached monitor.
+- `--classes` filters inside the model (cheaper than detecting all 80 and discarding 79); an
+  unknown class name raises rather than being silently ignored. `--list-classes` prints the
+  model's class names and exits.
+- `--ros` publishes `<ns>/detections`, `<ns>/target/pose`, `<ns>/color/compressed`; default
+  namespace is `/vision`, override with `--ros-ns` to match a vehicle in a multi-drone setup
+  (e.g. `--ros-ns uav_0`). Settled recording default (commit `65d2f88`): `--ros-jpeg-quality
+  80 --ros-image-hz 10` — quality barely affects encode time, but the DDS write cost tracks
+  message bytes, so this keeps detections/pose at full loop rate at ~1 GB/hour. Full
+  measurement in `ros_publisher.py`'s module docstring.
 - `scripts/run_detection_tmux.sh` / `tmux_status.sh` / `tmux_kill_all.sh` run
   the loop detached under tmux (it outlives the SSH session), report what is
   alive, and tear everything down. Logs land in `logs/` (gitignored).

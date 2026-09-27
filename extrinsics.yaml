@@ -10,5 +10,16 @@
 # rotation_quaternion: [x, y, z, w], drone frame -> camera reference frame
 #
 # Fill these in from the CAD mounting design.
-translation: [0.0, 0.0, 0.0]
-rotation_quaternion: [0.0, 0.0, 0.0, 1.0]
+#
+# Derived empirically instead, 2026-09-25: a static AprilTag (Motive-measured center,
+# raw Motive coords 0.5451, 0.017087, 0.929056) viewed from 8 drone poses spanning yaw,
+# pitch, and roll (scripts/apriltag_mocap_calib.py, log in extrinsic_calib_log.csv),
+# solved with scripts/solve_extrinsic.py (Kabsch/SVD rigid point-set registration). Fit
+# 1.6 cm RMS across all 8 samples (depth-based; 1.6 cm PnP-based, close agreement). The
+# raw-Motive -> /uav_0/mocap ENU convention this assumes -- (x, -z, y) -- was itself
+# solved for by picking the axis convention with the lowest residual out of the
+# physically-plausible candidates (next-best was 84 cm, a 50x gap), since
+# fsc_optitrack_processor_ros2 (which does that conversion) runs on the ground-station
+# laptop and isn't readable from this machine. Not cross-checked against CAD.
+translation: [0.0687, 0.0073, -0.2345]
+rotation_quaternion: [-0.6667, 0.6404, -0.2771, 0.2641]
