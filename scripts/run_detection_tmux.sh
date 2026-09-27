@@ -75,7 +75,17 @@ fi
 # detection process, while >(tee) still puts output on both the pane and the
 # log. Wrapped in an explicit `bash -c` because process substitution is a bash
 # feature and tmux would otherwise use whatever default-shell is set to.
-CMD="source $(printf %q "$VENV_ACTIVATE"); exec python -u main.py --headless"
+CMD=""
+# --ros needs rclpy, and the pane's non-interactive `bash -c` never reads ~/.bashrc, so
+# ROS is only on the path if the tmux server happened to start from a sourced shell.
+# ROS first, venv second, so the venv's python still wins.
+for arg in "$@"; do
+  if [[ "$arg" == "--ros" ]]; then
+    CMD+="source /opt/ros/${ROS_DISTRO:-humble}/setup.bash; "
+    break
+  fi
+done
+CMD+="source $(printf %q "$VENV_ACTIVATE"); exec python -u main.py --headless"
 for arg in "$@"; do
   CMD+=" $(printf %q "$arg")"
 done
